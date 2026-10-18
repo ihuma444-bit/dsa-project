@@ -1,14 +1,3 @@
-"""
-sorting.py - sorting algorithms for CS200 Project 1.
-
-Har algorithm list `a` ko in-place sort karta hai. List ke har item ka format hai
-(key, row). Sirf `key` compare hoti hai. Counters `st` (Stats) mein jama hote hain.
-
-Swap ki ginti:
-  - swap karne wale algorithms (bubble, selection, quick, heap): 1 swap = 2 elements ki adla badli
-  - shift/copy karne wale algorithms (insertion, shell, merge, hybrid):
-    har shift ya write ko 1 "swap" (move) ginte hain
-"""
 import time
 
 NUMERIC_COLUMNS = {"id", "episodes", "score", "popularity", "favourites", "year"}

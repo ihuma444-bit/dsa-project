@@ -5,9 +5,12 @@ from PyQt6.QtGui import QBrush, QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QProgressBar, QLabel, QTableWidget, QTableWidgetItem,
-    QComboBox, QGroupBox, QDialog,
+    QComboBox, QDialog, QTabWidget, QListWidget, QLineEdit, QCheckBox,
+    QPlainTextEdit,
 )
 from sorted import ALGORITHMS, NUMERIC_COLUMNS, algorithm_label, sort_rows
+import searching
+from searching import row_id
 
 FIELDS = ["id", "title", "type", "episodes", "status", "score",
           "popularity", "favourites", "year", "studio", "genre"]
@@ -47,10 +50,23 @@ QLabel { background: transparent; }
 QLabel#title { font-size: 22px; font-weight: bold; color: #ffffff; }
 QLabel#subtitle { color: #8c8fa6; }
 QLabel#status { color: #a99cff; }
-QGroupBox { background: transparent; border: 1px solid #2a2c3a; border-radius: 10px;
-            margin-top: 12px; padding: 14px 10px 10px 10px; }
-QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 6px; color: #a99cff;
-                   font-weight: bold; }
+QTabWidget::pane { border: 1px solid #2a2c3a; border-radius: 8px; top: -1px; }
+QTabBar::tab { background: #1d1f2b; color: #8c8fa6; padding: 8px 20px; margin-right: 4px;
+               border: 1px solid #2a2c3a; border-bottom: none;
+               border-top-left-radius: 8px; border-top-right-radius: 8px; }
+QTabBar::tab:selected { background: #262838; color: #ffffff; border-top: 2px solid #7c5cff; }
+QTabBar::tab:hover:!selected { color: #c9c5ff; }
+QLineEdit { background: #1d1f2b; border: 1px solid #34374a; border-radius: 6px; padding: 6px 10px; }
+QLineEdit:focus { border: 1px solid #7c5cff; }
+QLineEdit:disabled { color: #5c5f73; }
+QCheckBox { background: transparent; spacing: 8px; }
+QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #5c5f73;
+                       border-radius: 4px; background: #1d1f2b; }
+QCheckBox::indicator:checked { background: #7c5cff; border: 1px solid #7c5cff; }
+QPlainTextEdit { background: transparent; border: none; color: #a99cff; }
+QListWidget { background: #171925; border: 1px solid #2a2c3a; border-radius: 6px; padding: 4px; }
+QListWidget::item { padding: 4px 6px; }
+QListWidget::item:selected { background: #3b3470; color: #ffffff; }
 QPushButton { background: #262838; border: 1px solid #34374a; border-radius: 6px;
               padding: 7px 16px; }
 QPushButton:hover { background: #303349; }
@@ -85,6 +101,21 @@ QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 
 COL_WIDTHS = {"id": 70, "title": 300, "type": 90, "episodes": 90, "status": 120, "score": 70,
               "popularity": 110, "favourites": 110, "year": 70, "studio": 180, "genre": 130}
+
+
+class InfoBox(QPlainTextEdit):
+    """Search ke nateeje ka text box (kai lines dikhane ke liye)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setReadOnly(True)
+        self.setFixedHeight(96)
+
+    def setText(self, text):
+        self.setPlainText(text)
+
+    def text(self):
+        return self.toPlainText()
 
 
 def make_item(field, value):
@@ -276,7 +307,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Anime Explorer - CS200 Project 1")
-        self.resize(1200, 720)
+        self.resize(1250, 860)
         self.data = []        # saara data
         self.view = []        # jo table mein abhi dikh raha hai (baad mein filter yahan lagega)
         self.thread = None    # scraper thread
@@ -285,6 +316,8 @@ class MainWindow(QMainWindow):
         self.bench_dialog = None
         self.scraping = False
         self.busy = False     # sorting / benchmark chal raha hai
+        self.conditions = []  # search / filter conditions
+        self.filter_ids = None  # filter lagi ho to matching ids, warna None
 
         # ---------- scraping controls ----------
         self.btn_start = QPushButton("Start")
@@ -341,8 +374,58 @@ class MainWindow(QMainWindow):
         g.addWidget(self.btn_sort, 2, 0)
         g.addWidget(self.btn_bench, 2, 1)
         g.addWidget(self.sort_result, 2, 2, 1, 4)
-        box = QGroupBox("Sorting")
-        box.setLayout(g)
+        sort_page = QWidget()
+        sort_page.setLayout(g)
+
+        # ---------- search / filter panel ----------
+        self.cb_fcol = QComboBox()
+        for f in FIELDS:
+            self.cb_fcol.addItem(f.capitalize(), f)
+        self.cb_fop = QComboBox()
+        self.le_value = QLineEdit()
+        self.le_value.setPlaceholderText("value likho (jaise: action ya 80)")
+        self.cb_falgo = QComboBox()
+        for name in searching.ALGORITHMS:
+            self.cb_falgo.addItem(searching.algorithm_label(name), name)
+        self.cb_conn = QComboBox()
+        self.cb_conn.addItems(["AND", "OR"])
+        self.chk_not = QCheckBox("NOT (condition ka ulta)")
+        self.btn_add = QPushButton("Add condition")
+        self.btn_remove = QPushButton("Remove selected")
+        self.btn_apply = QPushButton("Apply")
+        self.btn_apply.setObjectName("primary")
+        self.btn_clear = QPushButton("Clear filter")
+        self.list_cond = QListWidget()
+        self.list_cond.setMaximumHeight(78)
+        self.search_info = InfoBox()
+
+        sg = QGridLayout()
+        sg.addWidget(QLabel("Column:"), 0, 0)
+        sg.addWidget(self.cb_fcol, 0, 1)
+        sg.addWidget(QLabel("Operator:"), 0, 2)
+        sg.addWidget(self.cb_fop, 0, 3)
+        sg.addWidget(QLabel("Value:"), 0, 4)
+        sg.addWidget(self.le_value, 0, 5)
+        sg.addWidget(QLabel("Algorithm:"), 1, 0)
+        sg.addWidget(self.cb_falgo, 1, 1, 1, 3)
+        sg.addWidget(QLabel("Join with:"), 1, 4)
+        sg.addWidget(self.cb_conn, 1, 5)
+        sg.addWidget(self.chk_not, 2, 0, 1, 2)
+        sg.addWidget(self.btn_add, 2, 2, 1, 2)
+        sg.addWidget(self.btn_remove, 2, 4, 1, 2)
+        sg.addWidget(self.list_cond, 3, 0, 1, 6)
+        row_btns = QHBoxLayout()
+        row_btns.addWidget(self.btn_apply)
+        row_btns.addWidget(self.btn_clear)
+        row_btns.addStretch(1)
+        sg.addLayout(row_btns, 4, 0, 1, 6)
+        sg.addWidget(self.search_info, 5, 0, 1, 6)
+        search_page = QWidget()
+        search_page.setLayout(sg)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(sort_page, "Sorting")
+        self.tabs.addTab(search_page, "Search / Filter")
 
         # ---------- table ----------
         self.table = QTableWidget(0, len(FIELDS))
@@ -372,7 +455,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(head)
         layout.addLayout(top)
         layout.addWidget(self.label)
-        layout.addWidget(box)
+        layout.addWidget(self.tabs)
         layout.addWidget(self.table, 1)
         root = QWidget()
         root.setLayout(layout)
@@ -384,6 +467,14 @@ class MainWindow(QMainWindow):
         self.btn_stop.clicked.connect(self.stop_scrape)
         self.btn_sort.clicked.connect(self.do_sort)
         self.btn_bench.clicked.connect(self.do_benchmark)
+        self.cb_fcol.currentIndexChanged.connect(self.update_operators)
+        self.btn_add.clicked.connect(self.add_condition)
+        self.btn_remove.clicked.connect(self.remove_condition)
+        self.btn_apply.clicked.connect(self.apply_filter)
+        self.btn_clear.clicked.connect(self.clear_filter)
+        self.le_value.returnPressed.connect(self.add_condition)
+        self.update_operators()
+        self.cb_conn.setEnabled(False)
 
         self.load_csv()
         self.set_buttons(running=False)
@@ -401,12 +492,17 @@ class MainWindow(QMainWindow):
         # scraping ya sorting ke dauran sorting controls band
         on = not self.scraping and not self.busy
         for w in (self.btn_sort, self.btn_bench, self.cb_col, self.cb_col2,
-                  self.cb_order, self.cb_algo, self.cb_scope):
+                  self.cb_order, self.cb_algo, self.cb_scope,
+                  self.cb_fcol, self.cb_fop, self.le_value, self.cb_falgo,
+                  self.chk_not, self.btn_add, self.btn_remove, self.btn_apply,
+                  self.btn_clear, self.list_cond):
             w.setEnabled(on)
+        self.cb_conn.setEnabled(on and len(self.conditions) > 0)
         self.btn_start.setEnabled(not self.scraping and not self.busy)
 
     # ---------- scraping controls ----------
     def start_scrape(self):
+        self.clear_filter()
         seen = {int(r["id"]) for r in self.data}   # purane data ko dobara add nahi karna
         self.thread = ScraperThread(seen, len(self.data))
         self.thread.page_done.connect(self.add_rows)
@@ -481,6 +577,7 @@ class MainWindow(QMainWindow):
         with open(CSV_FILE, newline="", encoding="utf-8") as f:
             self.data = list(csv.DictReader(f))
         self.view = list(self.data)
+        self.filter_ids = None
         self.populate_table(self.view)
         self.progress.setValue(min(len(self.data), TARGET))
         self.label.setText(f"Loaded {len(self.data)} anime from {CSV_FILE}")
@@ -516,6 +613,8 @@ class MainWindow(QMainWindow):
     def sort_done(self, rows, ms, comps, swaps):
         if self.cb_scope.currentData() == "full":
             self.data = rows
+            if self.filter_ids is not None:     # filter laga ho to wo bana rahe
+                rows = [r for r in rows if row_id(r) in self.filter_ids]
         self.view = rows
         self.populate_table(rows)
         algo = self.cb_algo.currentData()
@@ -543,6 +642,82 @@ class MainWindow(QMainWindow):
         self.bench_dialog.finished()
         self.sort_result.setText("Benchmark complete.")
         self.set_busy(False)
+
+    # ---------- searching / filters ----------
+    def update_operators(self):
+        col = self.cb_fcol.currentData()
+        self.cb_fop.clear()
+        self.cb_fop.addItems(searching.operators_for(col))
+        self.le_value.setPlaceholderText(
+            "number likho (jaise: 80)" if col in NUMERIC_COLUMNS
+            else "text likho (jaise: action)")
+
+    def add_condition(self):
+        value = self.le_value.text().strip()
+        col = self.cb_fcol.currentData()
+        if value == "":
+            self.search_info.setText("Pehle value likho.")
+            return
+        try:
+            searching.parse_value(col, value)
+        except ValueError:
+            self.search_info.setText(f"'{col}' number column hai, value number honi chahiye.")
+            return
+        self.conditions.append({
+            "column": col,
+            "op": self.cb_fop.currentText(),
+            "value": value,
+            "algo": self.cb_falgo.currentData(),
+            "connector": self.cb_conn.currentText() if self.conditions else None,
+            "negate": self.chk_not.isChecked(),
+        })
+        self.chk_not.setChecked(False)
+        self.le_value.clear()
+        self.search_info.setText("")
+        self.refresh_condition_list()
+
+    def remove_condition(self):
+        i = self.list_cond.currentRow()
+        if i < 0:
+            return
+        del self.conditions[i]
+        if self.conditions:
+            self.conditions[0]["connector"] = None
+        self.refresh_condition_list()
+
+    def refresh_condition_list(self):
+        self.list_cond.clear()
+        for i, c in enumerate(self.conditions):
+            self.list_cond.addItem(searching.condition_text(c, i == 0))
+        self.cb_conn.setEnabled(len(self.conditions) > 0 and not self.scraping and not self.busy)
+
+    def apply_filter(self):
+        if not self.conditions:
+            self.search_info.setText("Pehle kam az kam ek condition add karo.")
+            return
+        matched, details = searching.evaluate(self.data, self.conditions)
+        self.filter_ids = {row_id(r) for r in matched}
+        self.view = matched
+        self.populate_table(matched)
+        lines = [f"Found {len(matched):,} anime."]
+        for i, d in enumerate(details, 1):
+            line = (f"{i}) {d['text']}  ->  {d['algo_used']}: {d['count']:,} match, "
+                    f"{d['comparisons']:,} comparisons, {d['ms']:.2f} ms")
+            if d["prep_ms"]:
+                line += f" (+ sort {d['prep_ms']:.1f} ms)"
+            if d["note"]:
+                line += f"  [{d['note']}]"
+            lines.append(line)
+        self.search_info.setText("\n".join(lines))
+
+    def clear_filter(self):
+        self.conditions = []
+        self.filter_ids = None
+        self.list_cond.clear()
+        self.search_info.setText("")
+        self.cb_conn.setEnabled(False)
+        self.view = list(self.data)
+        self.populate_table(self.view)
 
     def closeEvent(self, event):
         if self.thread and self.thread.isRunning():
